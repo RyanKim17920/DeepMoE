@@ -21,6 +21,7 @@ class MoEBasicBlock(nn.Module):
         in_channels: int,
         out_channels: int,
         emb_dim: int,
+        wide: bool = False,
         stride: int = 1,
         downsample: Optional[nn.Module] = None,
         groups: int = 1,
@@ -35,6 +36,10 @@ class MoEBasicBlock(nn.Module):
             raise ValueError("BasicBlock only supports groups=1 and base_width=64")
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
+
+        if wide:
+            in_channels = in_channels * 2
+            out_channels = out_channels * 2
 
         self.conv1 = MoELayer(in_channels, out_channels, kernel_size=3, stride=stride, padding=dilation)
         self.bn1 = norm_layer(out_channels)
@@ -81,6 +86,7 @@ class MoEBottleneckA(nn.Module):
         self,
         in_channels: int,
         dim: int,
+        wide: bool = False,
         k: int = 4,
         stride: int = 1,
         downsample: Optional[nn.Module] = None,
@@ -90,6 +96,10 @@ class MoEBottleneckA(nn.Module):
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         mid_channels = in_channels // k
+
+        if wide:
+            in_channels = in_channels * 2
+            mid_channels = mid_channels * 2
 
         self.conv1 = MoELayer(in_channels, mid_channels, kernel_size=1)
         self.bn1 = norm_layer(mid_channels)
@@ -135,6 +145,7 @@ class MoEBottleneckB(nn.Module):
         self,
         in_channels: int,
         dim: int,
+        wide: bool = False,
         k: int = 4,
         stride: int = 1,
         downsample: Optional[nn.Module] = None,
@@ -145,6 +156,9 @@ class MoEBottleneckB(nn.Module):
             norm_layer = nn.BatchNorm2d
         mid_channels = in_channels // k
 
+        if wide:
+            in_channels = in_channels * 2
+            mid_channels = mid_channels * 2
         self.conv1 = conv1x1(in_channels, mid_channels)
         self.bn1 = norm_layer(mid_channels)
         self.conv2 = MoELayer(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1)
@@ -199,7 +213,7 @@ class ResNetMoe(nn.Module):
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
         
-        self.in_channels = 64
+        self.in_channels = 64 if not wide else 128
         self.dilation = 1
         if replace_stride_with_dilation is None:
             replace_stride_with_dilation = [False, False, False]
