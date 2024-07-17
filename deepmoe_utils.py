@@ -81,56 +81,6 @@ class MoELayer(nn.Module):
         
         return output
 
-
-"""
-Blocks follow the same structure as the ones in the paper.
-"""
-
-class BasicBlock(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.conv1 = MoELayer(in_channels, in_channels, 3, padding=1)
-        self.conv2 = MoELayer(in_channels, in_channels, 3, padding=1)
-    def forward(self, x, gate_values):
-        x_in = x
-        x = self.conv1(x, gate_values)
-        x = F.relu(x)
-        x = self.conv2(x, gate_values)
-        x = F.relu(x)
-        return x + x_in
-    
-class BottleneckA(nn.Module):
-    def __init__(self, in_channels, k = 4):
-        super().__init__()
-        self.conv1 = MoELayer(in_channels, in_channels / k, 1)
-        self.conv2 = MoELayer(in_channels / k, in_channels / k, 1)
-        self.conv3 = nn.Conv2d(in_channels / k, in_channels, 1)
-    def forward(self, x, gate_values):
-        x_in = x
-        x = self.conv1(x, gate_values)
-        x = F.relu(x)
-        x = self.conv2(x, gate_values)
-        x = F.relu(x)
-        x = self.conv3(x)
-        x = F.relu(x)
-        return x + x_in
-
-class BottleneckB(nn.Module):
-    def __init__(self, in_channels, k = 4):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, in_channels / k, 1)
-        self.conv2 = MoELayer(in_channels / k, in_channels / k, 1)
-        self.conv3 = nn.Conv2d(in_channels / k, in_channels, 1)
-    def forward(self, x, gate_values):
-        x_in = x
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = self.conv2(x, gate_values)
-        x = F.relu(x)
-        x = self.conv3(x)
-        x = F.relu(x)
-        return x + x_in
-
 """"Loss function as described in the paper."""
 
 def deepmoe_loss(outputs, embedding_outputs, targets, gates, lambda_val=0.001, mu=1.0):
