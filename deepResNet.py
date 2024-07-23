@@ -294,7 +294,7 @@ class ResNetMoe(nn.Module):
 
 
         return nn.Sequential(*layers)
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, predict=False) -> torch.Tensor:
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -318,7 +318,9 @@ class ResNetMoe(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
-
+        
+        if predict:
+            return x
         return x, gates, embedding_classifier
     
 

@@ -106,7 +106,7 @@ class VGGtoDeepMoe(nn.Module):
             self.classifier[0] = nn.Linear(self.classifier[0].in_features * 2, self.classifier[0].out_features)
         
         self.embedding_classifier = nn.Linear(dim, vgg_model.num_classes)
-    def forward(self, x):
+    def forward(self, x, predict):
         gates = []
 
         emb = self.embedding(x)
@@ -117,4 +117,6 @@ class VGGtoDeepMoe(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
         emb_class = self.embedding_classifier(emb)
+        if predict:
+            return x
         return x, emb_class, gates
