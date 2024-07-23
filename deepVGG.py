@@ -9,7 +9,8 @@ class ConvBlock(nn.Module):
         super(ConvBlock, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-
+        self.pool = pool
+        
         layers = [
             nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(out_channels),
@@ -23,7 +24,7 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 class VGG16(nn.Module):
-    def __init__(self, num_classes=10, channels = 3):
+    def __init__(self, num_classes=1000, channels = 3):
         # Normal VGG16 architecture
         super(VGG16, self).__init__()
         self.channels = channels
@@ -67,7 +68,8 @@ class MoeBlock(nn.Module):
         super(MoeBlock, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-
+        self.pool = pool
+        
         self.moe = MoELayer(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         layers = [
             nn.BatchNorm2d(out_channels),
@@ -90,19 +92,29 @@ class VGGtoDeepMoe(nn.Module):
             # Make sure the first layer keeps same input channels
             self.features = nn.ModuleList([MoeBlock(vgg_model.channels, vgg_model.features[0].out_channels * 2)])
             # Double the channels for the rest of the layers
-            self.features.extend([MoeBlock(i.in_channels * 2, i.out_channels * 2) for i in vgg_model.features[1:]])
+            self.features.extend([MoeBlock(i.in_channels * 2, i.out_channels * 2, i.pool) for i in vgg_model.features[1:]])
         else:
             self.features = nn.ModuleList([
-                MoeBlock(i.in_channels, i.out_channels) for i in vgg_model.features
+                MoeBlock(i.in_channels, i.out_channels, i.pool) for i in vgg_model.features
             ])
         self.gating = nn.ModuleList([
             MultiHeadedSparseGatingNetwork(dim, i.out_channels) for i in self.features
         ])
         self.classifier = vgg_model.classifier
+
+        if wide:
+            self.classifier[0] = nn.Linear(self.classifier[0].in_features * 2, self.classifier[0].out_features)
+        
+        self.embedding_classifier = nn.Linear(dim, vgg_model.num_classes)
     def forward(self, x):
+        gates = []
+
         emb = self.embedding(x)
         for (f, g) in zip(self.features, self.gating):
-            x = f(x, g(emb))
+            gate = g(emb)
+            gates.append(gate)
+            x = f(x, gate)
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
-        return x
+        emb_class = self.embedding_classifier(emb)
+        return x, emb_class, gates

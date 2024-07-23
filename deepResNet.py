@@ -136,7 +136,7 @@ class MoEBottleneckA(nn.Module):
         out += identity
         out = self.relu(out)
 
-        return out
+        return out, [gate_values_1, gate_values_2]
 
 class MoEBottleneckB(nn.Module):
     expansion: int = 4
@@ -191,7 +191,7 @@ class MoEBottleneckB(nn.Module):
         out += identity
         out = self.relu(out)
 
-        return out
+        return out, [gate_values]
 
 
 class ResNetMoe(nn.Module):
@@ -238,6 +238,7 @@ class ResNetMoe(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
+        self.embedding_classifier = nn.Linear(dim, num_classes)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
@@ -301,16 +302,24 @@ class ResNetMoe(nn.Module):
 
         embedding = self.embedding(x)
 
-        x = self.layer1(x, embedding)
-        x = self.layer2(x, embedding)
-        x = self.layer3(x, embedding)
-        x = self.layer4(x, embedding)
+        embedding_classifier = self.embedding_classifier(embedding)
+
+        gates = []
+        x, gate1 = self.layer1(x, embedding)
+        x, gate2 = self.layer2(x, embedding)
+        x, gate3 = self.layer3(x, embedding)
+        x, gate4 = self.layer4(x, embedding)
+
+        gates.extend(gate1)
+        gates.extend(gate2)
+        gates.extend(gate3)
+        gates.extend(gate4)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
 
-        return x
+        return x, gates, embedding_classifier
     
 
 def resnet18_moe(**kwargs: Any) -> ResNetMoe:

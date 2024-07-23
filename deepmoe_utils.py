@@ -67,9 +67,12 @@ class MoELayer(nn.Module):
         self.conv_layers = nn.ModuleList([nn.Conv2d(in_channels, 1, kernel_size, stride, padding) for _ in range(out_channels)])
         
     def forward(self, x, gate_values):
+        # Ensure gate_values is the same type as x
+        gate_values = gate_values.to(x.dtype)
+
         # Speeding up moe layer by only computing the output for the channels with non-zero gate values
         batch_size, _, height, width = x.shape
-        output = torch.zeros(batch_size, self.out_channels, height, width, device=x.device)
+        output = torch.zeros(batch_size, self.out_channels, height, width, device=x.device, dtype=x.dtype)
         
         for i, conv in enumerate(self.conv_layers):
             if gate_values[:, i].sum() > 0:  # If any gate value for this channel is non-zero
@@ -78,7 +81,6 @@ class MoELayer(nn.Module):
                 if selected_x.size(0) > 0:
                     selected_output = conv(selected_x) * gate_values[selected_indices, i].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
                     output[selected_indices, i] = selected_output.squeeze(1)
-        
         return output
 
 """"Loss function as described in the paper."""
