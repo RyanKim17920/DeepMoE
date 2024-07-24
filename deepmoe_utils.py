@@ -61,26 +61,21 @@ class MultiHeadedSparseGatingNetwork(nn.Module):
         return F.relu(self.fc(e))
 
 class MoELayer(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1):
         super().__init__()
-        self.out_channels = out_channels
-        self.conv_layers = nn.ModuleList([nn.Conv2d(in_channels, 1, kernel_size, stride, padding) for _ in range(out_channels)])
+        self.conv_layer = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation)
         
     def forward(self, x, gate_values):
         # Ensure gate_values is the same type as x
         gate_values = gate_values.to(x.dtype)
-
-        # Speeding up moe layer by only computing the output for the channels with non-zero gate values
-        batch_size, _, height, width = x.shape
-        output = torch.zeros(batch_size, self.out_channels, height, width, device=x.device, dtype=x.dtype)
-        
-        for i, conv in enumerate(self.conv_layers):
-            if gate_values[:, i].sum() > 0:  # If any gate value for this channel is non-zero
-                selected_indices = gate_values[:, i] > 0
-                selected_x = x[selected_indices]
-                if selected_x.size(0) > 0:
-                    selected_output = conv(selected_x) * gate_values[selected_indices, i].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-                    output[selected_indices, i] = selected_output.squeeze(1)
+        # Get batches in x
+        batch_size = x.size(0)
+        # fit gate_values to the same shape as x
+        gate_values = gate_values.view(batch_size, -1, 1, 1)
+        # Apply the convolutional layer
+        output = self.conv_layer(x)
+        # Apply the gates
+        output = output * gate_values
         return output
 
 """"Loss function as described in the paper."""

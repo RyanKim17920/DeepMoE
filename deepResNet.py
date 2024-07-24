@@ -41,7 +41,7 @@ class MoEBasicBlock(nn.Module):
             in_channels = in_channels * 2
             out_channels = out_channels * 2
 
-        self.conv1 = MoELayer(in_channels, out_channels, kernel_size=3, stride=stride, padding=dilation)
+        self.conv1 = MoELayer(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
         self.bn1 = norm_layer(out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = MoELayer(out_channels, out_channels, kernel_size=3, padding=1)
@@ -49,13 +49,12 @@ class MoEBasicBlock(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, in_channels)
+        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, out_channels)
         self.gate2 = MultiHeadedSparseGatingNetwork(emb_dim, out_channels)
     def forward(self, x: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
         identity = x
         
         gate_values_1 = self.gate1(embedding)
-
         out = self.conv1(x, gate_values_1)
         out = self.bn1(out)
         out = self.relu(out)
@@ -70,7 +69,7 @@ class MoEBasicBlock(nn.Module):
         out += identity
         out = self.relu(out)
 
-        return out
+        return out, [gate_values_1, gate_values_2]
 
 
 """
@@ -85,34 +84,38 @@ class MoEBottleneckA(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        dim: int,
+        out_channels: int,
+        emb_dim: int,
         wide: bool = False,
-        k: int = 4,
         stride: int = 1,
         downsample: Optional[nn.Module] = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
     ) -> None:
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
-        mid_channels = in_channels // k
+        mid_channels = int(out_channels * (base_width / 64.)) * groups
 
         if wide:
             in_channels = in_channels * 2
             mid_channels = mid_channels * 2
+            out_channels = out_channels * 2
 
         self.conv1 = MoELayer(in_channels, mid_channels, kernel_size=1)
         self.bn1 = norm_layer(mid_channels)
-        self.conv2 = MoELayer(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1)
+        self.conv2 = MoELayer(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1, dilation=dilation)
         self.bn2 = norm_layer(mid_channels)
-        self.conv3 = conv1x1(mid_channels, in_channels * self.expansion)
-        self.bn3 = norm_layer(in_channels * self.expansion)
+        self.conv3 = conv1x1(mid_channels, out_channels * self.expansion)
+        self.bn3 = norm_layer(out_channels * self.expansion)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
 
-        self.gate1 = MultiHeadedSparseGatingNetwork(dim, in_channels)
-        self.gate2 = MultiHeadedSparseGatingNetwork(dim, mid_channels)
+        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, in_channels)
+        self.gate2 = MultiHeadedSparseGatingNetwork(emb_dim, mid_channels)
 
     def forward(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         identity = x
@@ -144,40 +147,47 @@ class MoEBottleneckB(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        dim: int,
+        out_channels: int,
+        emb_dim: int,
         wide: bool = False,
-        k: int = 4,
         stride: int = 1,
         downsample: Optional[nn.Module] = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
     ) -> None:
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
-        mid_channels = in_channels // k
+        mid_channels = int(out_channels * (base_width / 64.)) * groups
 
         if wide:
             in_channels = in_channels * 2
             mid_channels = mid_channels * 2
+            out_channels = out_channels * 2
+
         self.conv1 = conv1x1(in_channels, mid_channels)
         self.bn1 = norm_layer(mid_channels)
-        self.conv2 = MoELayer(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1)
+        self.conv2 = MoELayer(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1, dilation=dilation)
         self.bn2 = norm_layer(mid_channels)
-        self.conv3 = conv1x1(mid_channels, in_channels * self.expansion)
-        self.bn3 = norm_layer(in_channels * self.expansion)
+        self.conv3 = conv1x1(mid_channels, out_channels * self.expansion)
+        self.bn3 = norm_layer(out_channels * self.expansion)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
 
-        self.gate1 = MultiHeadedSparseGatingNetwork(dim, in_channels)
-    def forward(self, x: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
+        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, in_channels)
+        self.gate2 = MultiHeadedSparseGatingNetwork(emb_dim, mid_channels)
+
+    def forward(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         identity = x
 
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
 
-        gate_values = self.gate1(embedding)
+        gate_values = self.gate2(embeddings)
         out = self.conv2(out, gate_values)
         out = self.bn2(out)
         out = self.relu(out)
@@ -213,7 +223,7 @@ class ResNetMoe(nn.Module):
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
         
-        self.in_channels = 64 if not wide else 128
+        self.in_channels = 64
         self.dilation = 1
         if replace_stride_with_dilation is None:
             replace_stride_with_dilation = [False, False, False]
@@ -224,17 +234,22 @@ class ResNetMoe(nn.Module):
             )
         self.groups = groups
         self.base_width = width_per_group
+        self.dim = dim
 
         self.embedding = ShallowEmbeddingNetwork(dim, 3)
 
-        self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = norm_layer(self.in_channels)
+        if wide:
+            self.conv1 = nn.Conv2d(3, self.in_channels * 2, kernel_size=7, stride=2, padding=3, bias=False)
+            self.bn1 = norm_layer(self.in_channels * 2)
+        else:
+            self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=7, stride=2, padding=3, bias=False)
+            self.bn1 = norm_layer(self.in_channels)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0], wide=wide)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], wide=wide)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], wide=wide)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], wide)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], wide=wide)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
@@ -260,10 +275,15 @@ class ResNetMoe(nn.Module):
         blocks: int,
         stride: int = 1,
         dilate: bool = False,
+        wide: bool = False,
     ) -> nn.Sequential:
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
+        if wide:
+            self.in_channels = self.in_channels * 2
+            out_channels = out_channels * 2
+
         if dilate:
             self.dilation *= stride
             stride = 1
@@ -273,10 +293,10 @@ class ResNetMoe(nn.Module):
                 norm_layer(out_channels * block.expansion),
             )
 
-        layers = []
+        layers = nn.ModuleList()
         layers.append(
             block(
-                self.in_channels, out_channels, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer
+                self.in_channels, out_channels, self.dim, wide, stride, downsample, self.groups, self.base_width, previous_dilation, norm_layer
             )
         )
         self.in_channels = out_channels * block.expansion
@@ -285,7 +305,8 @@ class ResNetMoe(nn.Module):
                 block(
                     self.in_channels,
                     out_channels,
-                    groups=self.groups,
+                    self.dim,
+                    wide,
                     base_width=self.base_width,
                     dilation=self.dilation,
                     norm_layer=norm_layer,
@@ -293,35 +314,37 @@ class ResNetMoe(nn.Module):
             )
 
 
-        return nn.Sequential(*layers)
+        return layers
     def forward(self, x: torch.Tensor, predict=False) -> torch.Tensor:
+        embedding = self.embedding(x)
+        emb_y_hat = self.embedding_classifier(embedding)
+
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
-
-        embedding = self.embedding(x)
-
-        embedding_classifier = self.embedding_classifier(embedding)
-
+        
         gates = []
-        x, gate1 = self.layer1(x, embedding)
-        x, gate2 = self.layer2(x, embedding)
-        x, gate3 = self.layer3(x, embedding)
-        x, gate4 = self.layer4(x, embedding)
-
-        gates.extend(gate1)
-        gates.extend(gate2)
-        gates.extend(gate3)
-        gates.extend(gate4)
+        for layer in self.layer1:
+            x, gate = layer(x, embedding)
+            gates.extend(gate)
+        for layer in self.layer2:
+            x, gate = layer(x, embedding)
+            gates.extend(gate)
+        for layer in self.layer3:
+            x, gate = layer(x, embedding)
+            gates.extend(gate)
+        for layer in self.layer4:
+            x, gate = layer(x, embedding)
+            gates.extend(gate)
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
-        
+
         if predict:
             return x
-        return x, gates, embedding_classifier
+        return x, gates, emb_y_hat
     
 
 def resnet18_moe(**kwargs: Any) -> ResNetMoe:
