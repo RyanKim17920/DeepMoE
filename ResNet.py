@@ -236,26 +236,26 @@ class ResNet(nn.Module):
         return self._forward_impl(x)
 
 
-class ResNet18(ResNet):
+class resnet18(ResNet):
     def __init__(self, num_classes: int = 1000) -> None:
         super().__init__(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
 
 
-class ResNet34(ResNet):
+class resnet34(ResNet):
     def __init__(self, num_classes: int = 1000) -> None:
         super().__init__(BasicBlock, [3, 4, 6, 3], num_classes=num_classes)
 
 
-class ResNet50(ResNet):
+class resnet50(ResNet):
     def __init__(self, num_classes: int = 1000) -> None:
         super().__init__(Bottleneck, [3, 4, 6, 3], num_classes=num_classes)
 
 
-class ResNet101(ResNet):
+class resnet101(ResNet):
     def __init__(self, num_classes: int = 1000) -> None:
         super().__init__(Bottleneck, [3, 4, 23, 3], num_classes=num_classes)
 
 
-class ResNet152(ResNet):
+class resnet152(ResNet):
     def __init__(self, num_classes: int = 1000) -> None:
         super().__init__(Bottleneck, [3, 8, 36, 3], num_classes=num_classes)

@@ -238,20 +238,21 @@ class ResNetMoe(nn.Module):
 
         self.embedding = ShallowEmbeddingNetwork(dim, 3)
 
-        if wide:
-            self.conv1 = nn.Conv2d(3, self.in_channels * 2, kernel_size=7, stride=2, padding=3, bias=False)
-            self.bn1 = norm_layer(self.in_channels * 2)
-        else:
-            self.conv1 = nn.Conv2d(3, self.in_channels, kernel_size=7, stride=2, padding=3, bias=False)
-            self.bn1 = norm_layer(self.in_channels)
+        wide_multiplier = 2 if wide else 1
+        self.conv1 = nn.Conv2d(3, self.in_channels * wide_multiplier, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = norm_layer(self.in_channels * wide_multiplier)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
         self.layer1 = self._make_layer(block, 64, layers[0], wide=wide)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], wide=wide)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dilate=replace_stride_with_dilation[1], wide=wide)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2], wide=wide)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        if wide:
+            self.fc = nn.Linear(512 * 2 * block.expansion, num_classes)
+        else:
+            self.fc = nn.Linear(512 * block.expansion, num_classes)
 
         self.embedding_classifier = nn.Linear(dim, num_classes)
         for m in self.modules():
@@ -280,17 +281,15 @@ class ResNetMoe(nn.Module):
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
-        if wide:
-            self.in_channels = self.in_channels * 2
-            out_channels = out_channels * 2
 
+        wide_multiplier = 2 if wide else 1
         if dilate:
             self.dilation *= stride
             stride = 1
         if stride != 1 or self.in_channels != out_channels * block.expansion:
             downsample = nn.Sequential(
-                conv1x1(self.in_channels, out_channels * block.expansion, stride),
-                norm_layer(out_channels * block.expansion),
+                conv1x1(self.in_channels * wide_multiplier, out_channels * block.expansion * wide_multiplier, stride),
+                norm_layer(out_channels * wide_multiplier * block.expansion),
             )
 
         layers = nn.ModuleList()
@@ -318,12 +317,10 @@ class ResNetMoe(nn.Module):
     def forward(self, x: torch.Tensor, predict=False) -> torch.Tensor:
         embedding = self.embedding(x)
         emb_y_hat = self.embedding_classifier(embedding)
-
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
-        
         gates = []
         for layer in self.layer1:
             x, gate = layer(x, embedding)

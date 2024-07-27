@@ -60,28 +60,38 @@ class MultiHeadedSparseGatingNetwork(nn.Module):
     def forward(self, e):
         return F.relu(self.fc(e))
 
+#"""
 class MoELayer(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1):
         super().__init__()
         self.conv_layer = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation)
         
     def forward(self, x, gate_values):
-        # Ensure gate_values is the same type as x
         gate_values = gate_values.to(x.dtype)
-        # Get batches in x
         batch_size = x.size(0)
-        # fit gate_values to the same shape as x
         gate_values = gate_values.view(batch_size, -1, 1, 1)
-        # Apply the convolutional layer
         output = self.conv_layer(x)
-        # Apply the gates
         output = output * gate_values
         return output
 
 """"Loss function as described in the paper."""
 
-def deepmoe_loss(outputs, embedding_outputs, targets, gates, lambda_val=0.001, mu=1.0):
-    base_loss = F.cross_entropy(outputs, targets)
-    gate_loss = sum(torch.linalg.norm(g, 1) for g in gates)
-    embedding_loss = F.cross_entropy(embedding_outputs, targets)
-    return base_loss + lambda_val * gate_loss + mu * embedding_loss
+class deepmoe_loss(nn.Module):
+    def __init__(self, lambda_val=0.001, mu=1.0):
+        super(deepmoe_loss, self).__init__()
+        self.lambda_val = lambda_val
+        self.mu = mu
+
+    def forward(self, outputs, embedding_outputs, targets, gates):
+        # Cross-entropy loss for the main outputs
+        base_loss = F.cross_entropy(outputs, targets)
+        
+        # L1 norm of the gate scores
+        gate_loss = sum(torch.linalg.norm(g, 1) for g in gates)
+        
+        # Cross-entropy loss for embedding outputs
+        embedding_loss = F.cross_entropy(embedding_outputs, targets)
+        
+        # Total loss
+        total_loss = base_loss + self.lambda_val * gate_loss + self.mu * embedding_loss
+        return total_loss
