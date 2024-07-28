@@ -114,8 +114,8 @@ class MoEBottleneckA(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, in_channels)
-        self.gate2 = MultiHeadedSparseGatingNetwork(emb_dim, mid_channels)
+        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, mid_channels)
+        self.gate2 = MultiHeadedSparseGatingNetwork(emb_dim, out_channels)
 
     def forward(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         identity = x
@@ -177,8 +177,7 @@ class MoEBottleneckB(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-        self.gate1 = MultiHeadedSparseGatingNetwork(emb_dim, in_channels)
-        self.gate2 = MultiHeadedSparseGatingNetwork(emb_dim, mid_channels)
+        self.gate = MultiHeadedSparseGatingNetwork(emb_dim, out_channels)
 
     def forward(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         identity = x
@@ -187,7 +186,7 @@ class MoEBottleneckB(nn.Module):
         out = self.bn1(out)
         out = self.relu(out)
 
-        gate_values = self.gate2(embeddings)
+        gate_values = self.gate(embeddings)
         out = self.conv2(out, gate_values)
         out = self.bn2(out)
         out = self.relu(out)

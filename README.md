@@ -11,3 +11,5 @@
 - The given hyperparameters for the embedding loss and gating loss work well in comparison to other arbitrary choices.
 - Training seems to have large amounts of local minima, seen through random canyons in the loss graph.
 - Extrapolation to validation data has explosions in loss but accuracy is still manageable.
+
+##### Due to lack of resources, only resnet18 models were tested. However, all models should be able to be ran without any issues.
