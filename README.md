@@ -12,4 +12,4 @@
 - Training seems to have large amounts of local minima, seen through random canyons in the loss graph.
 - Extrapolation to validation data has explosions in loss but accuracy is still manageable.
 
-##### Due to lack of GPU resources, only resnet18 models were trained. However, all models have been tested to run without issues.
+##### Due to lack of GPU resources, only resnet18 models were trained (I accidentally trained without cifar mode on for embeddings, but it shouldn't change the results by a massive amount). All models have been tested to run without issues (testall.py).

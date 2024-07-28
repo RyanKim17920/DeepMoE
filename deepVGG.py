@@ -84,10 +84,10 @@ class MoeBlock(nn.Module):
         return self.block(x)
 
 class VGGtoDeepMoe(nn.Module):
-    def __init__(self, vgg_model, dim = 512, wide = False):
+    def __init__(self, vgg_model, dim = 512, wide = False, cifar = False):
         # Normal VGG16 architecture
         super(VGGtoDeepMoe, self).__init__()
-        self.embedding = ShallowEmbeddingNetwork(dim, vgg_model.channels)
+        self.embedding = ShallowEmbeddingNetwork(dim, vgg_model.channels, cifar)
         if wide:
             # Make sure the first layer keeps same input channels
             self.features = nn.ModuleList([MoeBlock(vgg_model.channels, vgg_model.features[0].out_channels * 2)])

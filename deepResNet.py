@@ -212,6 +212,7 @@ class ResNetMoe(nn.Module):
         num_classes: int = 1000,
         zero_init_residual: bool = False,
         wide: bool = False,
+        cifar: bool = False,
         groups: int = 1,
         width_per_group: int = 64,
         replace_stride_with_dilation: Optional[List[bool]] = None,
@@ -235,7 +236,7 @@ class ResNetMoe(nn.Module):
         self.base_width = width_per_group
         self.dim = dim
 
-        self.embedding = ShallowEmbeddingNetwork(dim, 3)
+        self.embedding = ShallowEmbeddingNetwork(dim, 3, cifar)
 
         wide_multiplier = 2 if wide else 1
         self.conv1 = nn.Conv2d(3, self.in_channels * wide_multiplier, kernel_size=7, stride=2, padding=3, bias=False)
