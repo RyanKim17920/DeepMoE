@@ -7,9 +7,14 @@
  - The paper does not acknowledge the size of the embedding dimension. I have assumed it to be 128.
 
  ### Analysis of the model
- - I have done some preliminary results that doesn't show any significant improvement over the baseline model. The small models simply do worse than the baseline model, which is expected due to the gating of some channels. Additionally, it actually runs slower than the baseline model due to extra calculations.
+ - I have done some preliminary results that doesn't show any significant improvement over the baseline model. The small models simply do worse than the baseline model, which is expected due to loss of information from the gating of some channels. Additionally, it actually runs slower than the baseline model due to extra calculations.
 - The given hyperparameters for the embedding loss and gating loss work well in comparison to other arbitrary choices.
 - Training seems to have large amounts of local minima, seen through random canyons in the loss graph.
 - Extrapolation to validation data has explosions in loss but accuracy is still manageable.
+- The model may require a higher learning rate than the baseline model
+
+### Further work
+- The embedding layer may need to be more complex to learn more complex features.
+- Hyperparameters may need to be tuned further.
 
 ##### Due to lack of GPU resources, only resnet18 models were trained (I accidentally trained without cifar mode on for embeddings, but it shouldn't change the results by a massive amount). All models have been tested to run without issues (testall.py).
