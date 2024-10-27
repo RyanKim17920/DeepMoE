@@ -4,15 +4,15 @@ from typing import List, Union, Dict, Any, Optional
 from deepmoe_utils import ShallowEmbeddingNetwork, MultiHeadedSparseGatingNetwork, MoELayer
 
 class MoeBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, pool=False):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, batch_norm=False):
         super(MoeBlock, self).__init__()
         self.moe = MoELayer(in_channels, out_channels, kernel_size, stride, padding)
-        layers = [
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=False)
-        ]
-        if pool:
-            layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
+        
+        layers = []
+        if batch_norm:
+            layers.append(nn.BatchNorm2d(out_channels))
+        layers.append(nn.ReLU(inplace=False))
+        
         self.block = nn.Sequential(*layers)
     
     def forward(self, x, gate_values):
@@ -27,16 +27,16 @@ def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, gated: boo
             layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
         else:
             v = int(v)
-            if wide and i > 0:  # Apply wide factor to all layers except the first one
+            if wide and i > 0: 
                 v *= 2
             if gated:
-                conv = MoeBlock(in_channels, v, pool=False)
+                layers.append(MoeBlock(in_channels, v, batch_norm=batch_norm))
             else:
                 conv = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-            if batch_norm:
-                layers.append(nn.Sequential(conv, nn.BatchNorm2d(v), nn.ReLU(inplace=False)))
-            else:
-                layers.append(nn.Sequential(conv, nn.ReLU(inplace=True)))
+                if batch_norm:
+                    layers.append(nn.Sequential(conv, nn.BatchNorm2d(v), nn.ReLU(inplace=False)))
+                else:
+                    layers.append(nn.Sequential(conv, nn.ReLU(inplace=True)))
             in_channels = v
     return layers
 
@@ -73,10 +73,8 @@ class VGG(nn.Module):
         
         if gated:
             self.embedding = ShallowEmbeddingNetwork(dim, 3, cifar)
-            print([ layer[0].moe.out_channels if isinstance(layer[0], MoeBlock) else layer[0].moe.out_channels
-                for layer in self.features if not isinstance(layer, nn.MaxPool2d)])
             self.gating = nn.ModuleList([
-                MultiHeadedSparseGatingNetwork(dim, layer[0].moe.out_channels if isinstance(layer[0], MoeBlock) else layer[0].moe.out_channels)
+                MultiHeadedSparseGatingNetwork(dim, layer.moe.out_channels if isinstance(layer, MoeBlock) else layer.moe.out_channels)
                 for layer in self.features if not isinstance(layer, nn.MaxPool2d)
             ])
             self.embedding_classifier = nn.Linear(dim, num_classes)
@@ -88,23 +86,16 @@ class VGG(nn.Module):
         if self.gated:
             emb = self.embedding(x)
             gates = []
-            gate_index = 0  # Index for the gating network
+            gate_index = 0  
     
             for layer in self.features:
-                if isinstance(layer, nn.Sequential) and isinstance(layer[0], MoeBlock):
-                    gate_value = self.gating[gate_index](emb)
-                    gates.append(gate_value)
-                    x = layer[0](x, gate_value)
-                    for sub_layer in layer[1:]:
-                        x = sub_layer(x)
-                    gate_index += 1  # Move to the next gate
-                elif isinstance(layer, MoeBlock):
+                if isinstance(layer, MoeBlock):
                     gate_value = self.gating[gate_index](emb)
                     gates.append(gate_value)
                     x = layer(x, gate_value)
-                    gate_index += 1  # Move to the next gate
+                    gate_index += 1 
                 else:
-                    x = layer(x)  # Process without gating for MaxPool2d layers
+                    x = layer(x)
     
         else:
             for layer in self.features:
