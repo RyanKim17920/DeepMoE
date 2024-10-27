@@ -1,79 +1,15 @@
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from typing import List, Union, Dict, Any, Optional
 from deepmoe_utils import ShallowEmbeddingNetwork, MultiHeadedSparseGatingNetwork, MoELayer
 
-import torch.nn as nn
-
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, pool=False):
-        super(ConvBlock, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.pool = pool
-        
-        layers = [
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU()
-        ]
-        if pool:
-            layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
-        self.block = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.block(x)
-
-class VGG16(nn.Module):
-    def __init__(self, num_classes=1000, channels = 3):
-        # Normal VGG16 architecture
-        super(VGG16, self).__init__()
-        self.channels = channels
-        self.num_classes = num_classes
-        self.features = nn.Sequential(
-            ConvBlock(channels, 64),
-            ConvBlock(64, 64, pool=True),
-            ConvBlock(64, 128),
-            ConvBlock(128, 128, pool=True),
-            ConvBlock(128, 256),
-            ConvBlock(256, 256),
-            ConvBlock(256, 256, pool=True),
-            ConvBlock(256, 512),
-            ConvBlock(512, 512),
-            ConvBlock(512, 512, pool=True),
-            ConvBlock(512, 512),
-            ConvBlock(512, 512),
-            ConvBlock(512, 512, pool=True)
-        )
-        self.classifier = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(512*7*7, 4096),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
-            nn.ReLU(),
-            nn.Linear(4096, num_classes)
-        )
-    
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        x = self.classifier(x)
-        return x
-
-
-"""Turning VGG16 into a DeepMoE model"""
-
 class MoeBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, pool=False):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, pool=False):
         super(MoeBlock, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.pool = pool
-        
-        self.moe = MoELayer(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.moe = MoELayer(in_channels, out_channels, kernel_size, stride, padding)
         layers = [
             nn.BatchNorm2d(out_channels),
-            nn.ReLU()
+            nn.ReLU(inplace=False)
         ]
         if pool:
             layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
@@ -83,39 +19,178 @@ class MoeBlock(nn.Module):
         x = self.moe(x, gate_values)
         return self.block(x)
 
-class VGGtoDeepMoe(nn.Module):
-    def __init__(self, vgg_model, dim = 512, wide = False, cifar = False):
-        # Normal VGG16 architecture
-        super(VGGtoDeepMoe, self).__init__()
-        self.embedding = ShallowEmbeddingNetwork(dim, vgg_model.channels, cifar)
-        if wide:
-            # Make sure the first layer keeps same input channels
-            self.features = nn.ModuleList([MoeBlock(vgg_model.channels, vgg_model.features[0].out_channels * 2)])
-            # Double the channels for the rest of the layers
-            self.features.extend([MoeBlock(i.in_channels * 2, i.out_channels * 2, i.pool) for i in vgg_model.features[1:]])
+def make_layers(cfg: List[Union[str, int]], batch_norm: bool = False, gated: bool = False, wide: bool = False) -> nn.ModuleList:
+    layers: nn.ModuleList = nn.ModuleList()
+    in_channels = 3
+    for i, v in enumerate(cfg):
+        if v == "M":
+            layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
         else:
-            self.features = nn.ModuleList([
-                MoeBlock(i.in_channels, i.out_channels, i.pool) for i in vgg_model.features
-            ])
-        self.gating = nn.ModuleList([
-            MultiHeadedSparseGatingNetwork(dim, i.out_channels) for i in self.features
-        ])
-        self.classifier = vgg_model.classifier
-        if wide:
-            self.classifier[1] = nn.Linear(self.classifier[1].in_features * 2, self.classifier[1].out_features)
-        
-        self.embedding_classifier = nn.Linear(dim, vgg_model.num_classes)
-    def forward(self, x, predict):
-        gates = []
+            v = int(v)
+            if wide and i > 0:  # Apply wide factor to all layers except the first one
+                v *= 2
+            if gated:
+                conv = MoeBlock(in_channels, v, pool=False)
+            else:
+                conv = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
+            if batch_norm:
+                layers.append(nn.Sequential(conv, nn.BatchNorm2d(v), nn.ReLU(inplace=False)))
+            else:
+                layers.append(nn.Sequential(conv, nn.ReLU(inplace=True)))
+            in_channels = v
+    return layers
 
-        emb = self.embedding(x)
-        for (f, g) in zip(self.features, self.gating):
-            gate = g(emb)
-            gates.append(gate)
-            x = f(x, gate)
-        x = x.view(x.size(0), -1)
+class VGG(nn.Module):
+    def __init__(
+        self, 
+        features: nn.ModuleList, 
+        num_classes: int = 1000, 
+        init_weights: bool = True, 
+        dropout: float = 0.5,
+        gated: bool = False,
+        wide: bool = False,
+        dim: int = 128,
+        cifar: bool = False
+    ) -> None:
+        super().__init__()
+        self.features = features
+        self.gated = gated
+        self.wide = wide
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        
+        # Adjust the input features for the classifier based on whether it's a wide model
+        classifier_input_features = 512 * (2 if wide else 1) * 7 * 7
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(classifier_input_features, 4096),
+            nn.ReLU(False),
+            nn.Dropout(p=dropout),
+            nn.Linear(4096, 4096),
+            nn.ReLU(False),
+            nn.Dropout(p=dropout),
+            nn.Linear(4096, num_classes),
+        )
+        
+        if gated:
+            self.embedding = ShallowEmbeddingNetwork(dim, 3, cifar)
+            print([ layer[0].moe.out_channels if isinstance(layer[0], MoeBlock) else layer[0].moe.out_channels
+                for layer in self.features if not isinstance(layer, nn.MaxPool2d)])
+            self.gating = nn.ModuleList([
+                MultiHeadedSparseGatingNetwork(dim, layer[0].moe.out_channels if isinstance(layer[0], MoeBlock) else layer[0].moe.out_channels)
+                for layer in self.features if not isinstance(layer, nn.MaxPool2d)
+            ])
+            self.embedding_classifier = nn.Linear(dim, num_classes)
+        
+        if init_weights:
+            self._initialize_weights()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.gated:
+            emb = self.embedding(x)
+            gates = []
+            gate_index = 0  # Index for the gating network
+    
+            for layer in self.features:
+                if isinstance(layer, nn.Sequential) and isinstance(layer[0], MoeBlock):
+                    gate_value = self.gating[gate_index](emb)
+                    gates.append(gate_value)
+                    x = layer[0](x, gate_value)
+                    for sub_layer in layer[1:]:
+                        x = sub_layer(x)
+                    gate_index += 1  # Move to the next gate
+                elif isinstance(layer, MoeBlock):
+                    gate_value = self.gating[gate_index](emb)
+                    gates.append(gate_value)
+                    x = layer(x, gate_value)
+                    gate_index += 1  # Move to the next gate
+                else:
+                    x = layer(x)  # Process without gating for MaxPool2d layers
+    
+        else:
+            for layer in self.features:
+                x = layer(x)
+        
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
         x = self.classifier(x)
-        emb_class = self.embedding_classifier(emb)
-        if predict:
-            return x
-        return x, gates, emb_class
+        
+        if self.gated:
+            emb_class = self.embedding_classifier(emb)
+            return x, gates, emb_class
+        return x
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+cfgs: Dict[str, List[Union[str, int]]] = {
+    "A": [64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
+    "B": [64, 64, "M", 128, 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],
+    "D": [64, 64, "M", 128, 128, "M", 256, 256, 256, "M", 512, 512, 512, "M", 512, 512, 512, "M"],
+    "E": [64, 64, "M", 128, 128, "M", 256, 256, 256, 256, "M", 512, 512, 512, 512, "M", 512, 512, 512, 512, "M"],
+}
+
+def _vgg(cfg: str, batch_norm: bool, gated: bool = False, wide: bool = False, **kwargs: Any) -> VGG:
+    model = VGG(make_layers(cfgs[cfg], batch_norm=batch_norm, gated=gated, wide=wide), gated=gated, wide=wide, **kwargs)
+    return model
+
+def vgg11_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("A", False, True, wide, **kwargs)
+
+def vgg11_bn_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("A", True, True, wide, **kwargs)
+
+def vgg13_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("B", False, True, wide, **kwargs)
+
+def vgg13_bn_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("B", True, True, wide, **kwargs)
+
+def vgg16_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("D", False, True, wide, **kwargs)
+
+def vgg16_bn_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("D", True, True, wide, **kwargs)
+
+def vgg19_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("E", False, True, wide, **kwargs)
+
+def vgg19_bn_moe(wide: bool = False, **kwargs: Any) -> VGG:
+    return _vgg("E", True, True, wide, **kwargs)
+
+
+
+def vgg11(**kwargs: Any) -> VGG:
+    return _vgg("A", False, **kwargs)
+
+def vgg11_bn(**kwargs: Any) -> VGG:
+    return _vgg("A", True, **kwargs)
+
+def vgg13(**kwargs: Any) -> VGG:
+    return _vgg("B", False, **kwargs)
+
+def vgg13_bn(**kwargs: Any) -> VGG:
+    return _vgg("B", True, **kwargs)
+
+def vgg16(**kwargs: Any) -> VGG:
+    return _vgg("D", False, **kwargs)
+
+def vgg16_bn(**kwargs: Any) -> VGG:
+    return _vgg("D", True, **kwargs)
+
+def vgg19(**kwargs: Any) -> VGG:
+    return _vgg("E", False, **kwargs)
+
+def vgg19_bn(**kwargs: Any) -> VGG:
+    return _vgg("E", True, **kwargs)
+

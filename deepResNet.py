@@ -208,7 +208,7 @@ class ResNetMoe(nn.Module):
         self,
         block: Type[Union[MoEBasicBlock, MoEBottleneckA, MoEBottleneckB]],
         layers: List[int],
-        dim: int = 512,
+        dim: int = 128,
         num_classes: int = 1000,
         zero_init_residual: bool = False,
         wide: bool = False,

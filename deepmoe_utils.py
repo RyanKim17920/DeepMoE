@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class ShallowEmbeddingNetwork(nn.Module):
     def __init__(self, dim, input_channels, cifar=False):
@@ -16,32 +17,35 @@ class ShallowEmbeddingNetwork(nn.Module):
         with stride 2 (roughly 2% of the computation of the
         base models).
 
-        However, there is no mention of the number of channels so the ones used here are arbitrary.
+        However, there is no mention of the number of channels so the ones used here are arbitrary. 
+        These don't seem like 2% of the computation of the base models however.
         """
 
         if cifar:
+            dim_ = math.floor(dim / 4)
             self.net = nn.Sequential(
-                nn.Conv2d(input_channels, 32, 3, stride=2, padding=1),
+                nn.Conv2d(input_channels, dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(32, 64, 3, stride=2, padding=1),
+                nn.Conv2d(dim_, 2 * dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(64, 128, 3, stride=2, padding=1),
+                nn.Conv2d(2 * dim_, 3 * dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(128, dim, 3, stride=2, padding=1),
+                nn.Conv2d(3 * dim_, dim, 3, stride=2, padding=1),
                 nn.GELU(),
                 nn.AdaptiveAvgPool2d((1, 1)),
             )
         else:
+            dim_ = math.floor(dim / 5)
             self.net = nn.Sequential(
-                nn.Conv2d(input_channels, 32, 3, stride=2, padding=1),
+                nn.Conv2d(input_channels, dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(32, 64, 3, stride=2, padding=1),
+                nn.Conv2d(dim_, 2 * dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(64, 128, 3, stride=2, padding=1),
+                nn.Conv2d(2 * dim_, 3 * dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(128, 192, 3, stride=2, padding=1),
+                nn.Conv2d(3 * dim_, 4 * dim_, 3, stride=2, padding=1),
                 nn.GELU(),
-                nn.Conv2d(192, dim, 3, stride=2, padding=1),
+                nn.Conv2d(4 * dim_, dim, 3, stride=2, padding=1),
                 nn.GELU(),
                 nn.AdaptiveAvgPool2d((1, 1)),
             )
@@ -64,15 +68,15 @@ class MultiHeadedSparseGatingNetwork(nn.Module):
 class MoELayer(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1):
         super().__init__()
-        self.conv_layer = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation)
+        self.conv_layer = nn.Conv2d(in_channels, out_channels, kernel_size, 
+                                  stride=stride, padding=padding, dilation=dilation)
+        self.out_channels = out_channels  # Store output channels for reference
         
     def forward(self, x, gate_values):
-        gate_values = gate_values.to(x.dtype)
-        batch_size = x.size(0)
-        gate_values = gate_values.view(batch_size, -1, 1, 1)
+        gate_values = gate_values.view(gate_values.size(0), self.out_channels, 1, 1)
         output = self.conv_layer(x)
-        output = output * gate_values
-        return output
+        gated_output = output * gate_values
+        return gated_output
 
 """"Loss function as described in the paper."""
 
