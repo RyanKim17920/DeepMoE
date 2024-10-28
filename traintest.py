@@ -37,10 +37,21 @@ def initialize_optimizer(model, lr=0.001, optimizer_type="adam"):
 def initialize_scheduler(optimizer, step_size=20, gamma=0.5):
     return StepLR(optimizer, step_size=step_size, gamma=gamma)
 
-def update_criterion(epoch, num_epochs, lambda_val, mu):
+def update_criterion(epoch, num_epochs, lambda_val, mu, model=None):
     if epoch >= num_epochs - 5:
+        # Freeze the embedding layer
+        if model is not None and hasattr(model, 'embedding'):
+            for param in model.embedding.parameters():
+                param.requires_grad = False
         return deepmoe_loss(lambda_val=0.0, mu=0.0)
+    
+    # Unfreeze the embedding layer for earlier epochs if needed
+    if model is not None and hasattr(model, 'embedding'):
+        for param in model.embedding.parameters():
+            param.requires_grad = True
+            
     return deepmoe_loss(lambda_val=lambda_val, mu=mu)
+
 
 scaler = GradScaler()
 
@@ -124,7 +135,7 @@ def run_training_loop(model_class, num_classes, device, num_epochs, train_loader
         print(f"Epoch {epoch + 1}/{num_epochs}")
         
         if is_moe:
-            criterion = update_criterion(epoch, num_epochs, lambda_val, mu)
+            criterion = update_criterion(epoch, num_epochs, lambda_val, mu, model)
         
         train_loss, val_loss = train_and_validate(model, device, train_loader, val_loader, optimizer, criterion, epoch, print_every, is_moe, gradient_accumulation)
         scheduler.step()
@@ -153,15 +164,15 @@ def get_transforms(dataset_name):
 def main():
     torch.cuda.empty_cache()
     parser = argparse.ArgumentParser(description="Train a model")
-    parser.add_argument("--dataset", type=str, default="cifar10", choices=["cifar100", "cifar10", None], help="Dataset to train on (cifar10, cifar100, or None)")
+    parser.add_argument("--dataset", type=str, default="cifar100", choices=["cifar100", "cifar10", None], help="Dataset to train on (cifar10, cifar100, or None)")
     parser.add_argument("--data_dir", type=str, default="./data", help="Directory to store the dataset if using external data")
 
     parser.add_argument("--model", type=str, default="resnet18", help="Model to train")
     parser.add_argument("--num_classes", type=int, default=100, help="Number of classes in the dataset")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the training on")
 
-    parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs to train the model")
-    parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
+    parser.add_argument("--num_epochs", type=int, default=25, help="Number of epochs to train the model")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training")
     parser.add_argument("--gradient_accumulation" , type=int, default=1, help="Gradient Accumulation for training")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for the DataLoader")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for the optimizer")
