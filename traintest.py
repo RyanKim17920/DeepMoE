@@ -6,7 +6,7 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import MultiStepLR
 from deepmoe_utils import deepmoe_loss
 from deepResNet import resnet18_moe, resnet34_moe, resnet50_moe_a, resnet50_moe_b, resnet101_moe_a, resnet101_moe_b, resnet152_moe_a, resnet152_moe_b
 from ResNet import resnet18, resnet34, resnet50, resnet101, resnet152
@@ -34,11 +34,17 @@ def initialize_optimizer(model, lr=0.001, optimizer_type="adam"):
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
-def initialize_scheduler(optimizer, step_size=20, gamma=0.5):
-    return StepLR(optimizer, step_size=step_size, gamma=gamma)
 
-def update_criterion(epoch, num_epochs, lambda_val, mu, model=None):
-    if epoch >= num_epochs - 5:
+def initialize_scheduler(optimizer, milestones=None, gamma=0.1):
+    # If no milestones are specified, return a dummy scheduler that does nothing
+    if milestones is None or not milestones:
+        return lambda epoch: None  # A no-op lambda function
+    
+    # Return a MultiStepLR scheduler if milestones are provided
+    return MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
+
+def update_criterion(epoch, num_epochs, lambda_val, mu, model=None, num_frozen_epochs=5):
+    if epoch >= num_epochs - num_frozen_epochs:
         # Freeze the embedding layer
         if model is not None and hasattr(model, 'embedding'):
             for param in model.embedding.parameters():
@@ -124,18 +130,18 @@ def train_and_validate(model, device, train_loader, val_loader, optimizer, crite
     
     return train_loss, val_loss
 
-def run_training_loop(model_class, num_classes, device, num_epochs, train_loader, val_loader, lambda_val, mu, gradient_accumulation, lr=0.001, optimizer_type="adam", is_moe=False, print_every=None):
+def run_training_loop(model_class, num_classes, device, num_epochs, frozen_epochs, train_loader, val_loader, lambda_val, mu, gradient_accumulation, lr=0.001, optimizer_type="adam", is_moe=False, print_every=None, milestones=None):
     model = initialize_model(model_class, num_classes, device)
     print("Model type:", model.__class__.__name__, "Number of parameters:", sum(p.numel() for p in model.parameters()), "Trainable parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
     optimizer = initialize_optimizer(model, lr=lr, optimizer_type=optimizer_type)
     criterion = deepmoe_loss(lambda_val=lambda_val, mu=mu) if is_moe else nn.CrossEntropyLoss()
-    scheduler = initialize_scheduler(optimizer)
+    scheduler = initialize_scheduler(optimizer, milestones=milestones)
 
     for epoch in range(num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
         
         if is_moe:
-            criterion = update_criterion(epoch, num_epochs, lambda_val, mu, model)
+            criterion = update_criterion(epoch, num_epochs, lambda_val, mu, model, frozen_epochs)
         
         train_loss, val_loss = train_and_validate(model, device, train_loader, val_loader, optimizer, criterion, epoch, print_every, is_moe, gradient_accumulation)
         scheduler.step()
@@ -163,6 +169,7 @@ def get_transforms(dataset_name):
 
 def main():
     torch.cuda.empty_cache()
+    
     parser = argparse.ArgumentParser(description="Train a model")
     parser.add_argument("--dataset", type=str, default="cifar100", choices=["cifar100", "cifar10", None], help="Dataset to train on (cifar10, cifar100, or None)")
     parser.add_argument("--data_dir", type=str, default="./data", help="Directory to store the dataset if using external data")
@@ -172,6 +179,9 @@ def main():
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the training on")
 
     parser.add_argument("--num_epochs", type=int, default=25, help="Number of epochs to train the model")
+    parser.add_argument("--milestones", type=int, nargs="+", help="Milestones for the scheduler")
+    parser.add_argument("--freeze_epochs", type=int, default=5, help="Number of epochs to train at end with frozen embedding layer")
+
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training")
     parser.add_argument("--gradient_accumulation" , type=int, default=1, help="Gradient Accumulation for training")
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for the DataLoader")
@@ -184,6 +194,22 @@ def main():
     parser.add_argument("--is_wide", action="store_true", help="Whether to use the wide version of the model")
     parser.add_argument("--embedding_dim", type=int, default=128, help="Dimension of the embedding network if using a moe model")
     
+    parser.add_argument("--train_paper", type=str, choices = ["cifar", "imagenet", None], help="Train the model as in the paper")
+
+
+    if args.train_paper == "cifar":
+        args.lr = 0.1
+        args.num_epochs = 350
+        args.milestones = [150, 250]
+        args.freeze_epochs = 80
+    elif args.train_paper == "imagenet":
+        args.lr = 0.1
+        args.num_epochs = 210 # Total epochs are not given in paper
+        args.milestones = [100, 130, 160, 190] 
+        args.freeze_epochs = 30 # Not given in paper
+
+
+
     args = parser.parse_args()
     transform = get_transforms(args.dataset)
     
@@ -233,7 +259,12 @@ def main():
         "vgg19_bn_moe": partial(vgg19_bn_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
     }[args.model]
 
-    run_training_loop(model_class, args.num_classes, args.device, args.num_epochs, train_loader, val_loader, args.lambda_val, args.mu, args.gradient_accumulation, args.lr, args.optimizer, "moe" in args.model, print_every = args.print_every)
+    run_training_loop(model_class, args.num_classes, args.device, args.num_epochs, args.frozen_epochs,
+                      train_loader, val_loader, 
+                      args.lambda_val, args.mu, args.gradient_accumulation, args.lr, args.optimizer, 
+                      "moe" in args.model, 
+                      print_every = args.print_every,
+                      milestones = args.milestones)
 
 if __name__ == "__main__":
     main()
