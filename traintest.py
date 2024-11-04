@@ -169,7 +169,7 @@ def get_transforms(dataset_name):
 
 def main():
     torch.cuda.empty_cache()
-    
+
     parser = argparse.ArgumentParser(description="Train a model")
     parser.add_argument("--dataset", type=str, default="cifar100", choices=["cifar100", "cifar10", None], help="Dataset to train on (cifar10, cifar100, or None)")
     parser.add_argument("--data_dir", type=str, default="./data", help="Directory to store the dataset if using external data")
