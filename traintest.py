@@ -36,9 +36,9 @@ def initialize_optimizer(model, lr=0.001, optimizer_type="adam"):
 
 
 def initialize_scheduler(optimizer, milestones=None, gamma=0.1):
-    # If no milestones are specified, return a dummy scheduler that does nothing
+    # If no milestones are specified, return a constant LR scheduler
     if milestones is None or not milestones:
-        return lambda epoch: None  # A no-op lambda function
+        return MultiStepLR(optimizer, milestones=[1e10], gamma=1.0)  # Never steps
     
     # Return a MultiStepLR scheduler if milestones are provided
     return MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
@@ -168,6 +168,7 @@ def get_transforms(dataset_name):
 
 
 def main():
+
     torch.cuda.empty_cache()
 
     parser = argparse.ArgumentParser(description="Train a model")
@@ -178,7 +179,7 @@ def main():
     parser.add_argument("--num_classes", type=int, default=100, help="Number of classes in the dataset")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the training on")
 
-    parser.add_argument("--num_epochs", type=int, default=25, help="Number of epochs to train the model")
+    parser.add_argument("--epochs", type=int, default=25, help="Number of epochs to train the model")
     parser.add_argument("--milestones", type=int, nargs="+", help="Milestones for the scheduler")
     parser.add_argument("--freeze_epochs", type=int, default=5, help="Number of epochs to train at end with frozen embedding layer")
 
@@ -191,35 +192,38 @@ def main():
     
     parser.add_argument("--lambda_val", type=float, default=0.01, help="Lambda value for the deepmoe loss if using a moe model")
     parser.add_argument("--mu", type=float, default=1, help="Mu value for the deepmoe loss if using a moe model")
-    parser.add_argument("--is_wide", action="store_true", help="Whether to use the wide version of the model")
+    parser.add_argument("--wide", action="store_true", help="Whether to use the wide version of the model")
     parser.add_argument("--embedding_dim", type=int, default=128, help="Dimension of the embedding network if using a moe model")
     
     parser.add_argument("--train_paper", type=str, choices = ["cifar", "imagenet", None], help="Train the model as in the paper")
 
+    args = parser.parse_args()
 
     if args.train_paper == "cifar":
         args.lr = 0.1
-        args.num_epochs = 350
+        args.epochs = 350
         args.milestones = [150, 250]
         args.freeze_epochs = 80
     elif args.train_paper == "imagenet":
         args.lr = 0.1
-        args.num_epochs = 210 # Total epochs are not given in paper
+        args.epochs = 210 # Total epochs are not given in paper
         args.milestones = [100, 130, 160, 190] 
         args.freeze_epochs = 30 # Not given in paper
 
 
 
-    args = parser.parse_args()
+    
     transform = get_transforms(args.dataset)
     
     cifar = (args.dataset.lower() == "cifar100" or args.dataset.lower() == "cifar10")
     if args.dataset.lower() == "cifar100":
         train_dataset = datasets.CIFAR100(root='./data', train=True, download=True, transform=transform)
         val_dataset = datasets.CIFAR100(root='./data', train=False, download=True, transform=transform)
+        args.num_classes = 100
     elif args.dataset.lower() == "cifar10":
         train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
         val_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+        args.num_classes = 10
     else:
         train_dataset = datasets.ImageFolder(root=f'{args.data_dir}/train', transform=transform)
         val_dataset = datasets.ImageFolder(root=f'{args.data_dir}/val', transform=transform)
@@ -233,14 +237,14 @@ def main():
         "resnet50": partial(resnet50),
         "resnet101": partial(resnet101),
         "resnet152": partial(resnet152),
-        "resnet18_moe": partial(resnet18_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet34_moe": partial(resnet34_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet50_moe_a": partial(resnet50_moe_a, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet50_moe_b": partial(resnet50_moe_b, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet101_moe_a": partial(resnet101_moe_a, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet101_moe_b": partial(resnet101_moe_b, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet152_moe_a": partial(resnet152_moe_a, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "resnet152_moe_b": partial(resnet152_moe_b, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet18_moe": partial(resnet18_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet34_moe": partial(resnet34_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet50_moe_a": partial(resnet50_moe_a, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet50_moe_b": partial(resnet50_moe_b, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet101_moe_a": partial(resnet101_moe_a, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet101_moe_b": partial(resnet101_moe_b, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet152_moe_a": partial(resnet152_moe_a, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "resnet152_moe_b": partial(resnet152_moe_b, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
         "vgg11": partial(vgg11),
         "vgg11_bn": partial(vgg11_bn),
         "vgg13": partial(vgg13),
@@ -249,17 +253,17 @@ def main():
         "vgg16_bn": partial(vgg16_bn),
         "vgg19": partial(vgg19),
         "vgg19_bn": partial(vgg19_bn),
-        "vgg11_moe": partial(vgg11_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg11_bn_moe": partial(vgg11_bn_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg13_moe": partial(vgg13_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg13_bn_moe": partial(vgg13_bn_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg16_moe": partial(vgg16_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg16_bn_moe": partial(vgg16_bn_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg19_moe": partial(vgg19_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
-        "vgg19_bn_moe": partial(vgg19_bn_moe, wide=args.is_wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg11_moe": partial(vgg11_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg11_bn_moe": partial(vgg11_bn_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg13_moe": partial(vgg13_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg13_bn_moe": partial(vgg13_bn_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg16_moe": partial(vgg16_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg16_bn_moe": partial(vgg16_bn_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg19_moe": partial(vgg19_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
+        "vgg19_bn_moe": partial(vgg19_bn_moe, wide=args.wide, cifar=cifar, dim=args.embedding_dim),
     }[args.model]
 
-    run_training_loop(model_class, args.num_classes, args.device, args.num_epochs, args.frozen_epochs,
+    run_training_loop(model_class, args.num_classes, args.device, args.epochs, args.freeze_epochs,
                       train_loader, val_loader, 
                       args.lambda_val, args.mu, args.gradient_accumulation, args.lr, args.optimizer, 
                       "moe" in args.model, 
