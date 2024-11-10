@@ -16,24 +16,27 @@ import argparse
 def initialize_model(model_class, num_classes, device):
     return model_class(num_classes=num_classes).to(device)
 
-def initialize_optimizer(model, lr=0.001, optimizer_type="adam"):
+def initialize_optimizer(model, lr=0.001, optimizer_type="adam", weight_decay=0.0, **kwargs):
+
+    # Select optimizer with extra params
     if optimizer_type == "adam":
-        return optim.Adam(model.parameters(), lr=lr)
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
     elif optimizer_type == "sgd":
-        return optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=kwargs.get("momentum", 0.9), weight_decay=weight_decay)
     elif optimizer_type == "rmsprop":
-        return optim.RMSprop(model.parameters(), lr=lr)
+        optimizer = optim.RMSprop(model.parameters(), lr=lr, momentum=kwargs.get("momentum", 0.9), weight_decay=weight_decay, eps=kwargs.get("eps", 1e-8))
     elif optimizer_type == "adagrad":
-        return optim.Adagrad(model.parameters(), lr=lr)
+        optimizer = optim.Adagrad(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif optimizer_type == "adadelta":
-        return optim.Adadelta(model.parameters(), lr=lr)
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif optimizer_type == "adamw":
-        return optim.AdamW(model.parameters(), lr=lr)
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
     elif optimizer_type == "adamax":
-        return optim.Adamax(model.parameters(), lr=lr)
+        optimizer = optim.Adamax(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
+    return optimizer
 
 def initialize_scheduler(optimizer, milestones=None, gamma=0.1):
     # If no milestones are specified, return a constant LR scheduler
@@ -116,41 +119,92 @@ def validate(model, device, val_loader, criterion, moe=False):
             
     return total_loss / len(val_loader), correct / len(val_loader.dataset)
 
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.001, monitor="val_loss", verbose=False):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.monitor = monitor
+        self.best_score = None
+        self.epochs_without_improvement = 0
+        self.early_stop = False
+        self.verbose = verbose
+
+    def __call__(self, metric):
+        score = -metric if self.monitor == "val_loss" else metric
+
+        if self.best_score is None or score > self.best_score + self.min_delta:
+            self.best_score = score
+            self.epochs_without_improvement = 0
+        else:
+            self.epochs_without_improvement += 1
+            if self.verbose:
+                print(f"EarlyStopping counter: {self.epochs_without_improvement} out of {self.patience}")
+            if self.epochs_without_improvement >= self.patience:
+                self.early_stop = True
+
 def train_and_validate(model, device, train_loader, val_loader, optimizer, criterion, epoch, print_every, is_moe=False, accumulation_steps=1):
+    # Training step
     start_time_train = time.time()
     train_loss, train_acc = train(model, device, train_loader, optimizer, criterion, print_every, is_moe, accumulation_steps)
     train_duration = time.time() - start_time_train
 
+    # Validation step
     start_time_val = time.time()
     val_loss, val_acc = validate(model, device, val_loader, criterion, is_moe)
     val_duration = time.time() - start_time_val
 
-    print(f"Model - Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+    print(f"Epoch {epoch+1} - Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
     print(f"Training Duration: {train_duration:.2f} seconds | Validation Duration: {val_duration:.2f} seconds")
     
-    return train_loss, val_loss
+    return train_loss, val_loss, val_acc
 
-def run_training_loop(model_class, num_classes, device, num_epochs, frozen_epochs, train_loader, val_loader, lambda_val, mu, gradient_accumulation, lr=0.001, optimizer_type="adam", is_moe=False, print_every=None, milestones=None):
+def run_training_loop(
+    model_class, num_classes, device, num_epochs, frozen_epochs, train_loader, val_loader, 
+    lambda_val, mu, gradient_accumulation, lr=0.001, optimizer_type="adam", is_moe=False, 
+    print_every=None, milestones=None, gamma = 0.1, early_stop_metric="val_loss", patience=5
+):
+    # Initialize model, optimizer, criterion, and scheduler
     model = initialize_model(model_class, num_classes, device)
-    print("Model type:", model.__class__.__name__, "Number of parameters:", sum(p.numel() for p in model.parameters()), "Trainable parameters:", sum(p.numel() for p in model.parameters() if p.requires_grad))
     optimizer = initialize_optimizer(model, lr=lr, optimizer_type=optimizer_type)
     criterion = deepmoe_loss(lambda_val=lambda_val, mu=mu) if is_moe else nn.CrossEntropyLoss()
-    scheduler = initialize_scheduler(optimizer, milestones=milestones)
+    scheduler = initialize_scheduler(optimizer, milestones=milestones, gamma=gamma)
+    
+    # Early stopping setup
+    early_stopping = EarlyStopping(patience=patience, monitor=early_stop_metric, verbose=True)
 
     for epoch in range(num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
-        
+
+        # Update criterion if using mixture of experts (MOE)
         if is_moe:
             criterion = update_criterion(epoch, num_epochs, lambda_val, mu, model, frozen_epochs)
-        
-        train_loss, val_loss = train_and_validate(model, device, train_loader, val_loader, optimizer, criterion, epoch, print_every, is_moe, gradient_accumulation)
+
+        # Train and validate
+        train_loss, val_loss, val_acc = train_and_validate(
+            model, device, train_loader, val_loader, optimizer, criterion, epoch, 
+            print_every, is_moe, gradient_accumulation
+        )
+
+        # Scheduler step
         scheduler.step()
+
+        # Early stopping check based on selected metric
+        metric_to_monitor = val_loss if early_stop_metric == "val_loss" else val_acc
+        early_stopping(metric_to_monitor)
+
+        # Stop if early stopping criteria are met
+        if early_stopping.early_stop:
+            print("Early stopping triggered. Stopping training.")
+            break
 
 def get_transforms(dataset_name):
     if dataset_name.lower() == "cifar100" or dataset_name.lower() == "cifar10":
         # CIFAR specific transformations
         transform = transforms.Compose([
             transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10), 
+            transforms.RandomAffine(0, shear=10, scale=(0.8, 1.2)),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
             transforms.RandomCrop(32, padding=4),
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
@@ -161,6 +215,9 @@ def get_transforms(dataset_name):
         transform = transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomAffine(0, shear=10, scale=(0.8, 1.2)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -181,6 +238,7 @@ def main():
 
     parser.add_argument("--epochs", type=int, default=25, help="Number of epochs to train the model")
     parser.add_argument("--milestones", type=int, nargs="+", help="Milestones for the scheduler")
+    parser.add_argument("--gamma", type=float, default=0.1, help="Gamma value for the scheduler")
     parser.add_argument("--freeze_epochs", type=int, default=5, help="Number of epochs to train at end with frozen embedding layer")
 
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size for training")
@@ -189,7 +247,10 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for the optimizer")
     parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "sgd", "rmsprop", "adagrad", "adadelta", "adamw", "adamax"], help="Optimizer type")
     parser.add_argument("--print_every", type=int, default=None, help="Number of batches between printing training progress")
-    
+    parser.add_argument("--early_stop_metric", type=str, default="val_acc", choices=["val_loss", "val_acc"], help="Metric to monitor for early stopping (either 'val_loss' or 'val_acc').")
+    parser.add_argument("--patience", type=int, default=1e10, help="Number of epochs with no improvement after which training will be stopped.")
+
+
     parser.add_argument("--lambda_val", type=float, default=0.01, help="Lambda value for the deepmoe loss if using a moe model")
     parser.add_argument("--mu", type=float, default=1, help="Mu value for the deepmoe loss if using a moe model")
     parser.add_argument("--wide", action="store_true", help="Whether to use the wide version of the model")
@@ -268,7 +329,10 @@ def main():
                       args.lambda_val, args.mu, args.gradient_accumulation, args.lr, args.optimizer, 
                       "moe" in args.model, 
                       print_every = args.print_every,
-                      milestones = args.milestones)
+                      milestones = args.milestones,
+                      gamma = args.gamma,
+                      early_stop_metric = args.early_stop_metric,
+                      patience = args.patience)
 
 if __name__ == "__main__":
     main()

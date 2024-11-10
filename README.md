@@ -42,8 +42,10 @@ The following are key arguments you can use to configure the training process:
 - **Optimizer and Learning Rate Scheduler Options**
   - `--optimizer`: Optimizer to use. Options include `"adam"`, `"sgd"`, `"rmsprop"`, `"adagrad"`, `"adadelta"`, `"adamw"`, and `"adamax"`. Default is `"adam"`.
   - `--lr`: Learning rate for the optimizer. Default is `0.001`.
-  - `--milestones`: List of epochs where the learning rate is adjusted by 0.1 times for the MultiStepLR scheduler.
-
+  - `--milestones`: List of epochs where the learning rate is adjusted by gamma times for the MultiStepLR scheduler.
+  - `--gamma`: Factor by which the learning rate is reduced at each milestone for the MultiStepLR scheduler. Default is `0.1`.
+  - `--early_stop_metric`: Metric to use for early stopping. Options are `"val_loss"` or `"val_acc"`. Default is `"val_acc"`.
+  - `--patience`: Number of epochs to wait before early stopping if the metric does not improve. Default is `1e10` (essentially negates it).
 - **Advanced Options**
   - `--lambda_val`: Lambda value for the `deepmoe_loss` if using a Mixture of Experts (MoE) model. Default is `0.01`.
   - `--freeze_epochs`: Number of epochs to train with a frozen embedding layer, deducted from the total epochs specified. Default is `5`.
@@ -98,7 +100,7 @@ This setup allows you to configure and experiment with different models, optimiz
 - Training seems to have large amounts of local minima, seen through random canyons in the loss graph.
 - Extrapolation to validation data has explosions in loss (likely due to the CE loss from routers) but accuracy is still manageable.
 - Using the training method from the paper leads to exploding gradients and loss. Lower learning rates re necessary to keep training stability. 
-
+- L1 regularization may only decrease activation values instead of zeroing them out, which still uses up extra parameters.
 ## Further work
 - The embedding layer may need to be more complex to learn more complex features.
 - Hyperparameters may need to be tuned further.
