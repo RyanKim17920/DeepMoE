@@ -46,6 +46,17 @@ The following are key arguments you can use to configure the training process:
   - `--gamma`: Factor by which the learning rate is reduced at each milestone for the MultiStepLR scheduler. Default is `0.1`.
   - `--early_stop_metric`: Metric to use for early stopping. Options are `"val_loss"` or `"val_acc"`. Default is `"val_acc"`.
   - `--patience`: Number of epochs to wait before early stopping if the metric does not improve. Default is `1e10` (essentially negates it).
+
+  - ***Optimizer-specific options***
+  - - `--momentum`: Momentum factor for SGD optimizer. Default is `0.9`.
+  - - `--weight_decay`: Weight decay (L2 penalty) for the optimizer. Default is `0`.
+  - - `--eps`: Epsilon value for the optimizer. Default is `1e-8`.
+  - - `--betas`: Betas for the optimizer. Default is `(0.9, 0.999)`.
+  - - `--alpha`: Alpha value for the optimizer. Default is `0.99`.
+  - - `--lr_decay`: Learning rate decay for the optimizer. Default is `0`.
+  - - `--rho`: Rho value for the optimizer. Default is `0.9`.
+
+
 - **Advanced Options**
   - `--lambda_val`: Lambda value for the `deepmoe_loss` if using a Mixture of Experts (MoE) model. Default is `0.01`.
   - `--freeze_epochs`: Number of epochs to train with a frozen embedding layer, deducted from the total epochs specified. Default is `5`.

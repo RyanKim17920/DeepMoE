@@ -20,19 +20,19 @@ def initialize_optimizer(model, lr=0.001, optimizer_type="adam", weight_decay=0.
 
     # Select optimizer with extra params
     if optimizer_type == "adam":
-        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay, eps=kwargs.get("eps", 1e-8), betas=kwargs.get("betas", (0.9, 0.999)))
     elif optimizer_type == "sgd":
         optimizer = optim.SGD(model.parameters(), lr=lr, momentum=kwargs.get("momentum", 0.9), weight_decay=weight_decay)
     elif optimizer_type == "rmsprop":
-        optimizer = optim.RMSprop(model.parameters(), lr=lr, momentum=kwargs.get("momentum", 0.9), weight_decay=weight_decay, eps=kwargs.get("eps", 1e-8))
+        optimizer = optim.RMSprop(model.parameters(), lr=lr, momentum=kwargs.get("momentum", 0.9), weight_decay=weight_decay, eps=kwargs.get("eps", 1e-8), alpha=kwargs.get("alpha", 0.99))
     elif optimizer_type == "adagrad":
-        optimizer = optim.Adagrad(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = optim.Adagrad(model.parameters(), lr=lr, weight_decay=weight_decay, lr_decay=kwargs.get("lr_decay", 0.0), eps=kwargs.get("eps", 1e-10))
     elif optimizer_type == "adadelta":
-        optimizer = optim.Adadelta(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer = optim.Adadelta(model.parameters(), lr=lr, weight_decay=weight_decay, rho=kwargs.get("rho", 0.9), eps=kwargs.get("eps", 1e-6))
     elif optimizer_type == "adamw":
-        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, eps=kwargs.get("eps", 1e-8), betas=kwargs.get("betas", (0.9, 0.999)))
     elif optimizer_type == "adamax":
-        optimizer = optim.Adamax(model.parameters(), lr=lr, weight_decay=weight_decay, **kwargs)
+        optimizer = optim.Adamax(model.parameters(), lr=lr, weight_decay=weight_decay, eps=kwargs.get("eps", 1e-8), betas=kwargs.get("betas", (0.9, 0.999)))
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
@@ -160,12 +160,12 @@ def train_and_validate(model, device, train_loader, val_loader, optimizer, crite
 
 def run_training_loop(
     model_class, num_classes, device, num_epochs, frozen_epochs, train_loader, val_loader, 
-    lambda_val, mu, gradient_accumulation, lr=0.001, optimizer_type="adam", is_moe=False, 
-    print_every=None, milestones=None, gamma = 0.1, early_stop_metric="val_loss", patience=5
+    lambda_val, mu, gradient_accumulation, lr=0.001, optimizer_type="adam", weight_decay = 0.0, is_moe=False, 
+    print_every=None, milestones=None, gamma = 0.1, early_stop_metric="val_loss", patience=5, **kwargs
 ):
     # Initialize model, optimizer, criterion, and scheduler
     model = initialize_model(model_class, num_classes, device)
-    optimizer = initialize_optimizer(model, lr=lr, optimizer_type=optimizer_type)
+    optimizer = initialize_optimizer(model, lr=lr, optimizer_type=optimizer_type, weight_decay=weight_decay, **kwargs)
     criterion = deepmoe_loss(lambda_val=lambda_val, mu=mu) if is_moe else nn.CrossEntropyLoss()
     scheduler = initialize_scheduler(optimizer, milestones=milestones, gamma=gamma)
     
@@ -246,10 +246,10 @@ def main():
     parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for the DataLoader")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate for the optimizer")
     parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "sgd", "rmsprop", "adagrad", "adadelta", "adamw", "adamax"], help="Optimizer type")
+    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay for the optimizer")
     parser.add_argument("--print_every", type=int, default=None, help="Number of batches between printing training progress")
     parser.add_argument("--early_stop_metric", type=str, default="val_acc", choices=["val_loss", "val_acc"], help="Metric to monitor for early stopping (either 'val_loss' or 'val_acc').")
     parser.add_argument("--patience", type=int, default=1e10, help="Number of epochs with no improvement after which training will be stopped.")
-
 
     parser.add_argument("--lambda_val", type=float, default=0.01, help="Lambda value for the deepmoe loss if using a moe model")
     parser.add_argument("--mu", type=float, default=1, help="Mu value for the deepmoe loss if using a moe model")
@@ -258,7 +258,23 @@ def main():
     
     parser.add_argument("--train_paper", type=str, choices = ["cifar", "imagenet", None], help="Train the model as in the paper")
 
+    parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon value for the optimizer")
+    parser.add_argument("--betas", type=float, nargs=2, default=(0.9, 0.999), help="Betas for the optimizer")
+    parser.add_argument("--momentum", type=float, default=0.9, help="Momentum for the optimizer")
+    parser.add_argument("--alpha", type=float, default=0.99, help="Alpha for the optimizer")
+    parser.add_argument("--lr_decay", type=float, default=0.0, help="Learning rate decay for the optimizer")
+    parser.add_argument("--rho", type=float, default=0.9, help="Rho for the optimizer")
+
     args = parser.parse_args()
+
+    optimizer_kwargs = {
+        "eps": args.eps,
+        "betas": args.betas,
+        "momentum": args.momentum,
+        "alpha": args.alpha,
+        "lr_decay": args.lr_decay,
+        "rho": args.rho
+    }
 
     if args.train_paper == "cifar":
         args.lr = 0.1
@@ -326,13 +342,13 @@ def main():
 
     run_training_loop(model_class, args.num_classes, args.device, args.epochs, args.freeze_epochs,
                       train_loader, val_loader, 
-                      args.lambda_val, args.mu, args.gradient_accumulation, args.lr, args.optimizer, 
+                      args.lambda_val, args.mu, args.gradient_accumulation, args.lr, args.optimizer, args.weight_decay,
                       "moe" in args.model, 
                       print_every = args.print_every,
                       milestones = args.milestones,
                       gamma = args.gamma,
                       early_stop_metric = args.early_stop_metric,
-                      patience = args.patience)
+                      patience = args.patience, **optimizer_kwargs)
 
 if __name__ == "__main__":
     main()
