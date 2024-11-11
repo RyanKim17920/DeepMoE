@@ -110,7 +110,7 @@ This setup allows you to configure and experiment with different models, optimiz
 - The given hyperparameters for the embedding loss and gating loss work well in comparison to other arbitrary choices.
 - Training seems to have large amounts of local minima, seen through random canyons in the loss graph.
 - Extrapolation to validation data has explosions in loss (likely due to the CE loss from routers) but accuracy is still manageable.
-- Using the training method from the paper leads to exploding gradients and loss. Lower learning rates re necessary to keep training stability. 
+- Using the training method from the paper leads to exploding gradients and loss. Lower learning rates are necessary to keep training stability but convergence is very slow. 
 - L1 regularization may only decrease activation values instead of zeroing them out, which still uses up extra parameters.
 ## Further work
 - The embedding layer may need to be more complex to learn more complex features.
